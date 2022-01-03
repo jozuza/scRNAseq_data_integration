@@ -1,0 +1,474 @@
+Script for data integration using Harmony
+http://htmlpreview.github.io/?https://github.com/immunogenomics/harmony/blob/master/docs/SeuratV3.html
+
+Seurat V3 Interface
+This brief vignette demonstrates how to use Harmony with Seurat V3. This example closely follows the Seurat vignette: https://satijalab.org/seurat/v3.0/immune_alignment.html
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(Seurat)
+library(cowplot)
+library(harmony)
+library(dplyr)
+library(DT)
+library(purrr)
+library(ggplot2)
+```
+
+
+```{r, load}
+# https://satijalab.org/seurat/articles/integration_introduction.html
+#prepared datasets for integration
+#load...........................................................................
+
+GSE136447 <- readRDS("../RawData/GSE136447/GSE136447_SeuratObj.rds")
+EMTAB3929 <- readRDS("../RawData/EMTAB3929/EMTAB3929_SeuratObj.rds")
+HRA000128 <- readRDS("../RawData/HRA000128/HRA000128_SeuratObj.rds")
+
+#Adjust cell name to be unique
+GSE136447@meta.data$Cell <-  paste(GSE136447@meta.data$Sample,GSE136447@meta.data$Cell,sep = "-")
+EMTAB3929@meta.data$Cell <-  paste(EMTAB3929@meta.data$Sample,EMTAB3929@meta.data$Cell,sep = "-")
+HRA000128@meta.data$Cell <-  paste(HRA000128@meta.data$Sample,HRA000128@meta.data$Cell,sep = "-")
+
+```
+
+#Calculate percentage of mitochondrial genes....................................
+```{r }
+#TO ta dando errado!!!!!
+Genes.Ann <- read.table("../external_metadata/GeneId_Symbol.txt", header = T, sep = "\t")
+Genes.Ann$ID_Symbol = paste(Genes.Ann$EnsemblID, Genes.Ann$Symbol, sep = "-")
+Mito.genes = Genes.Ann[grep(Genes.Ann$Symbol, pattern = "^MT-"),3]
+
+#https://github.com/hbctraining/scRNA-seq/blob/master/lessons/mitoRatio.md
+# "GSE136447"
+  counts = as.data.frame(as.matrix(GSE136447[["RNA"]]@counts)) 
+  MetaData <- GSE136447@meta.data
+  # Number of reads assigned to mitochondrial genes
+  MetaData$mt.sum <- Matrix::colSums(counts[which(rownames(counts) %in% Mito.genes),], na.rm = T)
+    # Calculate of mitoRatio per cell
+  MetaData$mitoRatio <- MetaData$mt.sum/MetaData$nCount_RNA
+  identical(rownames(MetaData), rownames(GSE136447@meta.data))
+  GSE136447@meta.data$mitoRatio  <- MetaData$mitoRatio
+  rm(counts, MetaData)
+# "EMTAB3929" 
+  counts = as.data.frame(as.matrix(EMTAB3929[["RNA"]]@counts)) 
+  MetaData <- EMTAB3929@meta.data
+  # Number of reads assigned to mitochondrial genes
+  MetaData$mt.sum <- Matrix::colSums(counts[which(rownames(counts) %in% Mito.genes),], na.rm = T)
+  # Calculate of mitoRatio per cell
+  MetaData$mitoRatio <- MetaData$mt.sum/MetaData$nCount_RNA
+  identical(rownames(MetaData), rownames(EMTAB3929@meta.data))
+  EMTAB3929@meta.data$mitoRatio  <- MetaData$mitoRatio
+  rm(counts, MetaData)
+# "HRA000128"      
+  counts = as.data.frame(as.matrix(HRA000128[["RNA"]]@counts)) 
+  MetaData <- HRA000128@meta.data
+  # Number of reads assigned to mitochondrial genes
+  MetaData$mt.sum <- Matrix::colSums(counts[which(rownames(counts) %in% Mito.genes),], na.rm = T)
+  # Calculate of mitoRatio per cell
+  MetaData$mitoRatio <- MetaData$mt.sum/MetaData$nCount_RNA
+  identical(rownames(MetaData), rownames(HRA000128@meta.data))
+  HRA000128@meta.data$mitoRatio  <- MetaData$mitoRatio
+  rm(counts, MetaData)
+  
+  
+  rm(Mito.genes)
+```
+
+#Join them all
+```{r }
+seurat <- merge(GSE136447, y = c(EMTAB3929, HRA000128), add.cell.ids = c("GSE136447", "EMTAB3929", "HRA000128"), project = "HDEV")
+seurat
+
+#Check point 
+unique(sapply(X = strsplit(colnames(seurat), split = "_"), FUN = "[", 1))
+table(seurat$orig.ident)
+rm(GSE136447, EMTAB3929, HRA000128)
+```
+
+Filter cells
+```{r fig1, fig.height = 13, fig.width = 13, fig.align = "center"}
+#use VlnPlot function to quick check your data
+VlnPlot(seurat,
+        features = c("nCount_RNA", "nFeature_RNA", "mitoRatio"),
+        ncol = 1, group.by = "orig.ident"
+        )
+ggsave("../Plots/Integration_process/01.Harmony_Violin_Before.png")
+
+p1 <- FeatureScatter(seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+p2 <- FeatureScatter(seurat, feature1 = "nCount_RNA", feature2 = "mitoRatio")
+p1+p2
+ggsave("../Plots/Integration_process/01.Harmony_FeatureScater_Before.png")
+rm(p1,p2)
+
+
+```
+
+```{r fig2, fig.height = 13, fig.width = 13, fig.align = "center"}
+
+seurat <- subset(seurat,
+                 subset = mitoRatio < 0.4 &
+                   nFeature_RNA > summary(seurat@meta.data$nFeature_RNA)["1st Qu."] &
+                   nCount_RNA > summary(seurat@meta.data$nCount_RNA)["1st Qu."]) #maybe I'm xlcuding syncytiotrophoblast cells with nCount_RNA...
+
+VlnPlot(seurat,
+        features = c("nCount_RNA", "nFeature_RNA", "mitoRatio"),
+        ncol = 1, group.by = "orig.ident"
+        # , split.by = "lineage"
+        )
+ggsave("../Plots/Integration_process/Harmony_Violin_After.png")
+
+p1 <- FeatureScatter(seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+p2 <- FeatureScatter(seurat, feature1 = "nCount_RNA", feature2 = "mitoRatio")
+p1+p2
+ggsave("../Plots/Integration_process/02.Harmony_FeatureScater_After.png")
+
+rm(p1,p2)
+```
+
+```{r }
+message("Before")
+table(seurat@meta.data$Day)
+
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "E5", replacement = "D05")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "E6", replacement = "D06")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "E7", replacement = "D07")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "D6", replacement = "D06")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "D7", replacement = "D07")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "D8", replacement = "D08")
+seurat@meta.data$Day <- gsub(seurat@meta.data$Day, pattern = "D9", replacement = "D09")
+
+message("\nAfter")
+table(seurat@meta.data$Day)
+```
+
+Before running Harmony, make a Seurat object and follow the standard pipeline through PCA.
+
+IMPORTANT DIFFERENCE: In the Seurat integration tutorial, you need to define a Seurat object for each dataset. With Harmony integration, create only one Seurat object with all cells.
+
+```{r }
+seurat <- Seurat::NormalizeData(seurat, verbose = FALSE) %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(pc.genes = seurat@var.genes, npcs = 50, verbose = FALSE)
+```
+
+
+Check for differences between the datasets in the uncorrected PCs
+
+```{r fig3, fig.align = "center"}
+options(repr.plot.height = 5, repr.plot.width = 12)
+p1 <- DimPlot(object = seurat, reduction = "pca", pt.size = 1, group.by = "orig.ident")
+p2 <- VlnPlot(object = seurat, features = "PC_1", group.by = "Day", 
+              pt.size = .1) + theme(legend.position = "")
+p3 <- VlnPlot(object = seurat, features = "PC_2", group.by = "Day", 
+              pt.size = .1) + theme(legend.position = "")
+p4 <- VlnPlot(object = seurat, features = "PC_3", group.by = "Day", 
+              pt.size = .1) + theme(legend.position = "")
+plot_grid(p1,p2,p3,p4)
+
+```
+
+Run Harmony
+The simplest way to run Harmony is to pass the Seurat object and specify which variable(s) to integrate out. RunHarmony returns a Seurat object, updated with the corrected Harmony coordinates. Let's set plot_convergence to TRUE, so we can make sure that the Harmony objective function gets better with each round.
+
+```{r figure4}
+options(repr.plot.height = 2.5, repr.plot.width = 6)
+seurat <- seurat %>% 
+    RunHarmony("Day", plot_convergence = TRUE)
+```
+
+Harmony 1/10
+Harmony 2/10
+Harmony 3/10
+Harmony 4/10
+Harmony 5/10
+Harmony 6/10
+Harmony 7/10
+Harmony 8/10
+Harmony converged after 8 iterations
+
+To directly access the new Harmony embeddings, use the Embeddings command.
+```{r }
+harmony_embeddings <- Embeddings(seurat, 'harmony')
+```
+
+```{r figure5}
+
+meta_data <- seurat@meta.data
+
+source("Do_Scater_Harmony_function.R")
+library(ggplot2)
+colors_use <- c(`GSE136447` = '#810F7C', `EMTAB3929` = '#D09E2D',`HRA000128` = '#006D2C')
+do_scatter(harmony_embeddings, meta_data, 'orig.ident') + 
+    labs(title = 'Colored by dataset')
+
+# 
+# 
+# do_scatter(harmony_embeddings, meta_data, 'lineage') + 
+#     labs(title = 'Colored by cell type')
+# cowplot::plot_grid(p1, p2, nrow = 1)
+
+```
+
+Let's make sure that the datasets are well integrated in the first 2 dimensions after Harmony.
+
+```{r figure 6}
+
+options(repr.plot.height = 5, repr.plot.width = 12)
+p5 <- DimPlot(object = seurat, reduction = "harmony", pt.size = 1, group.by = "orig.ident")
+p6 <- VlnPlot(object = seurat, features = "harmony_1", group.by = "Day", 
+              pt.size = .1) + theme(legend.position = "")
+
+plot_grid(p1,p2,p5,p6)
+ggsave("../Plots/Integration_process/03.Harmony_Before_and_After.png")
+
+DimPlot(object = seurat, reduction = "harmony", pt.size = 1, group.by = "Day", split.by = "orig.ident")
+```
+
+Downstream analysis
+Many downstream analyses are performed on low dimensional embeddings, not gene expression. To use the corrected Harmony embeddings rather than PCs, set reduction = 'harmony'. For example, let's perform the UMAP and Nearest Neighbor analyses using the Harmony embeddings.
+```{r figure 7}
+E1 <- ElbowPlot(object = seurat,  ndims = 50)
+```
+
+```{r }
+# Determine percent of variation associated with each PC
+# https://hbctraining.github.io/scRNA-seq_online/lessons/elbow_plot_metric.html
+pct <- seurat[["pca"]]@stdev / sum(seurat[["pca"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+
+co1
+
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+# last point where change of % of variation is more than 0.1%.
+co2
+
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+
+pcs
+
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+           cumu = cumu, 
+           rank = 1:length(pct))
+
+# Elbow plot to visualize 
+E2 <-  ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw()
+ 
+plot_grid(E1, E2)  
+```
+
+Based on these metrics, for the clustering of cells in Seurat we will use the first 20 PCs to generate the clusters
+
+```{r message=FALSE, warning=FALSE}
+seurat <- seurat %>% 
+    RunUMAP(reduction = "harmony", dims = 1:20) %>% 
+    RunTSNE(reduction = "harmony", dims = 1:20) %>% 
+    FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+  # Determine the clusters for various resolutions                                
+    FindClusters(resolution = c(0.4, 0.6, 0.8, 1.0, 1.4)) %>% 
+    identity()
+```
+
+In the UMAP embedding, we can see more intricate structure. Since we used harmony embeddings, the UMAP embeddings are well mixed.
+```{r figure 8}
+options(repr.plot.height = 4, repr.plot.width = 10)
+DimPlot(seurat, reduction = "umap", 
+        group.by = "Day",
+        split.by = 'orig.ident',
+        pt.size = 2)
+ggsave("../Plots/Integration_process/04.Harmony_UMAP_Dataset.png")
+
+```
+#plot the different resolutions
+
+```{r fig9, message=FALSE, warning=FALSE}
+# Plot the UMAP
+p7 <- DimPlot(seurat,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 1,
+        label.box = T,
+        repel = T,
+        group.by = "lineage") +
+  theme(legend.position = "",
+        plot.title = element_text(size = 10, hjust = 0),
+        axis.title = element_text(size = 7), 
+        axis.text  = element_text(size = 7))
+
+# Assign identity of clusters
+
+Dim_plot_Resolution <- function(Resolution){
+  Idents(object = seurat) <- Resolution
+  DimPlot(seurat, reduction = "umap",
+          label = TRUE, 
+          label.size = 3,
+          label.color = "black") + 
+  theme(legend.position = "",
+        plot.title = element_text(size = 10),
+        axis.title = element_text(size = 7), 
+        axis.text  = element_text(size = 7)) +
+    ggtitle(Resolution)
+}
+
+p8  <- Dim_plot_Resolution("RNA_snn_res.0.4") 
+p9  <- Dim_plot_Resolution("RNA_snn_res.0.6")
+p10 <- Dim_plot_Resolution("RNA_snn_res.0.8")
+p11 <- Dim_plot_Resolution("RNA_snn_res.1")
+p12 <- Dim_plot_Resolution("RNA_snn_res.1.4")
+
+
+plot_grid(p7,p8,p9,p10,p11,p12,
+          nrow = 2, ncol = 3)
+ggsave("../Plots/Integration_process/05.Harmony_UMAP_Clusters.png")
+
+```
+
+```{r }
+Idents(object = seurat) <- "RNA_snn_res.0.6"
+p10 <- DimPlot(seurat,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 2,
+        label.box = T,
+        repel = T,
+        group.by = "orig.ident") +
+  theme(legend.position = "",
+        plot.title = element_text(size = 10, hjust = 0),
+        axis.title = element_text(size = 7), 
+        axis.text  = element_text(size = 7))
+
+# Plot the UMAP
+p11 <- DimPlot(seurat,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 2,
+        label.box = T,
+        repel = T,
+        group.by = "lineage") +
+  theme(legend.position = "",
+        plot.title = element_text(size = 10, hjust = 0),
+        axis.title = element_text(size = 7), 
+        axis.text  = element_text(size = 7))
+
+
+p12 <-  DimPlot(seurat, reduction = "umap",
+              label = TRUE, 
+              label.size = 4,
+              label.color = "black",
+              # group.by = "seurat_clusters") + 
+              group.by = "RNA_snn_res.0.6") + 
+    theme(legend.position = "",
+        plot.title = element_text(size = 10, hjust = 0),
+        axis.title = element_text(size = 7), 
+        axis.text  = element_text(size = 7))
+
+
+plot_grid(p10,p11,p12,
+          nrow = 1, ncol = 3)
+ggsave("../Plots/Integration_process/06.Harmony_Clusters.png")
+
+```
+
+
+```{r Segregation of clusters by cell type }
+#I'll keep the 0.6
+Idents(object = seurat) <- "RNA_snn_res.0.6"
+
+# Extract identity and sample information from seurat object to determine the number of cells per cluster per sample
+n_cells <- FetchData(seurat, 
+                     vars = c("Day", "seurat_clusters")) %>%
+        dplyr::count(Day, seurat_clusters) %>%
+        tidyr::spread(Day, n)
+
+# View table
+DT::datatable(n_cells)
+```
+
+```{r Segregation of clusters by cell type }
+
+Idents(object = seurat) <- "RNA_snn_res.0.6"
+
+# Extract identity and sample information from seurat object to determine the number of cells per cluster per sample
+n_cells <- FetchData(seurat, 
+                     vars = c("Day", "lineage")) %>%
+        dplyr::count(Day, lineage) %>%
+        tidyr::spread(Day, n)
+
+# View table
+DT::datatable(n_cells)
+```
+
+```{r Check if some unwanted variables are influencing the clusteres }
+
+metrics <- c("nCount_RNA", "nFeature_RNA", "mitoRatio")
+FeaturePlot(seurat, reduction = "umap", 
+            features = metrics, 
+            label = TRUE, 
+            label.size = 4,
+            order = TRUE,
+            ncol = 3,
+            pt.size = 2)
+```
+Exploration of the PCs driving the different clusters
+In the UMAP plots below, the cells are colored by their PC score for each respective principal component.
+
+```{r message=FALSE, warning=FALSE}
+#We can also explore how well our clusters separate by the different PCs;
+# Defining the information in the seurat object of interest
+columns <- c(paste0("PC_", 1:20),
+            "ident",
+            "UMAP_1", "UMAP_2")
+
+# Extracting this data from the seurat object
+pc_data <- FetchData(seurat, 
+                     vars = columns)
+# Adding cluster label to center of cluster on UMAP
+umap_label <- FetchData(seurat, 
+                        vars = c("ident", "UMAP_1", "UMAP_2"))  %>%
+  group_by(ident) %>%
+  summarise(x=mean(UMAP_1), y=mean(UMAP_2))
+  
+# Plotting a UMAP plot for each of the PCs
+map(paste0("PC_", 1:20),
+    function(pc){
+      ggplot(pc_data, 
+             aes(UMAP_1, UMAP_2)) +
+        
+        geom_point(aes_string(color=pc), 
+                   alpha = 0.6) +
+        scale_color_gradient(guide = FALSE, 
+                             low = "grey90", 
+                             high = "blue")  +
+        geom_text(data=umap_label, 
+                  aes(label=ident, x, y)) +
+        
+        theme(legend.position = "",
+              plot.title = element_text(size = 10, hjust = 0),
+              axis.title = element_text(size = 7), 
+              axis.text  = element_text(size = 7)) +
+        ggtitle(pc)
+    }) %>% 
+  plot_grid(plotlist = .)
+ggsave("../Plots/Integration_process/07.Harmony_Comparing_PCs.png")
+
+
+```
+
+
+```{r save}
+saveRDS(seurat, file = "../Integrated/Harmony_SeuratObj.rds")
+
+```
